@@ -1,0 +1,6 @@
+@_1150070050_QLPK_GK_LTM_HostAddress = http://localhost:5179
+
+GET {{_1150070050_QLPK_GK_LTM_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
