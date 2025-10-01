@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using _1150070050_QLPK_GK_LTM.Models.Entities;
+using System;
 
 namespace _1150070050_QLPK_GK_LTM.Controllers
 {
@@ -9,24 +10,24 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     public class UsersController : ControllerBase
     {
         private readonly tuvyContext _context;
+        private readonly EmailService _emailService;
 
-        public UsersController(tuvyContext context)
+        public UsersController(tuvyContext context, EmailService emailService)
         {
             _context = context;
+            _emailService = emailService;
         }
 
         // ===============================
         // CRUD USERS
         // ===============================
 
-        // GET: api/Users
         [HttpGet]
         public async Task<ActionResult<IEnumerable<User>>> GetUsers()
         {
             return await _context.Users.ToListAsync();
         }
 
-        // GET: api/Users/5
         [HttpGet("{id}")]
         public async Task<ActionResult<User>> GetUser(int id)
         {
@@ -35,7 +36,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return user;
         }
 
-        // POST: api/Users (chỉ dùng cho admin CRUD, không phải đăng ký)
         [HttpPost]
         public async Task<ActionResult<User>> CreateUser(User user)
         {
@@ -44,7 +44,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return CreatedAtAction(nameof(GetUser), new { id = user.Id }, user);
         }
 
-        // PUT: api/Users/5
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateUser(int id, User user)
         {
@@ -54,7 +53,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return NoContent();
         }
 
-        // DELETE: api/Users/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteUser(int id)
         {
@@ -129,5 +127,104 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             });
         }
 
+        // ===============================
+        // QUÊN MẬT KHẨU (GỬI MÃ OTP)
+        // ===============================
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
+        {
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            if (user == null)
+                return NotFound(new { message = "Email không tồn tại" });
+
+            // Tạo OTP chỉ có 6 số và gửi qua email
+            string otp = GenerateOtp();
+            _emailService.SendOtpEmail(user.Email, otp);
+
+            // Lưu OTP vào cơ sở dữ liệu để xác thực sau này
+            user.OtpCode = otp;
+            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10); // Hết hạn sau 10 phút
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Mã OTP đã được gửi đến email của bạn" });
+        }
+
+        // ===============================
+        // XÁC THỰC MÃ OTP
+        // ===============================
+        [HttpPost("verify-otp")]
+        public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
+        {
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            if (user == null)
+                return NotFound(new { message = "Email không tồn tại" });
+
+            // Log OTP và thời gian hết hạn để kiểm tra
+            Console.WriteLine($"Received OTP: {dto.OtpCode}, User OTP: {user.OtpCode}, Expiry: {user.OtpExpiry}");
+
+            if (user.OtpCode != dto.OtpCode || user.OtpExpiry < DateTime.UtcNow)
+                return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
+
+            return Ok(new { message = "OTP xác thực thành công" });
+        }
+
+        public class VerifyOtpDto
+        {
+            public string Email { get; set; }
+            public string OtpCode { get; set; }
+        }
+
+        // ===============================
+        // THAY ĐỔI MẬT KHẨU
+        // ===============================
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
+        {
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            if (user == null)
+                return NotFound(new { message = "Email không tồn tại" });
+
+            // Kiểm tra OTP
+            if (user.OtpCode != dto.OtpCode || user.OtpExpiry < DateTime.UtcNow)
+                return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
+
+            // Cập nhật mật khẩu mới
+            user.PasswordHash = dto.NewPassword; // Hash mật khẩu nếu cần thiết
+            user.OtpCode = null; // Xóa mã OTP sau khi sử dụng
+            user.OtpExpiry = null;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Mật khẩu đã được thay đổi thành công" });
+        }
+
+        // ===============================
+        // Lớp DTOs
+        // ===============================
+        public class ForgotPasswordDto
+        {
+            public string Email { get; set; }
+        }
+
+        public class ResetPasswordDto
+        {
+            public string Email { get; set; }
+            public string OtpCode { get; set; }
+            public string NewPassword { get; set; }
+        }
+
+        // ===============================
+        // Tạo mã OTP 6 số ngẫu nhiên
+        // ===============================
+        private string GenerateOtp(int length = 6)
+        {
+            Random random = new Random();
+            string otp = "";
+            for (int i = 0; i < length; i++)
+            {
+                otp += random.Next(0, 10).ToString(); // Chỉ tạo số từ 0 đến 9
+            }
+            return otp;
+        }
     }
 }

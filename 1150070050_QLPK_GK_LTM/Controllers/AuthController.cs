@@ -20,9 +20,12 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         public async Task<ActionResult<LoginResponse>> Google([FromBody] GoogleTokenDto dto)
         {
             if (string.IsNullOrWhiteSpace(dto?.IdToken))
-                return BadRequest("Missing idToken");
+                return BadRequest(new { message = "Missing idToken" });
 
             var webClientId = _cfg["GoogleOAuth:WebClientId"];
+            if (string.IsNullOrWhiteSpace(webClientId))
+                return StatusCode(500, new { message = "GoogleOAuth:WebClientId not configured" });
+
             var allowedHd = _cfg["GoogleOAuth:AllowedHd"]; // optional
 
             GoogleJsonWebSignature.Payload payload;
@@ -35,31 +38,42 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
                         Audience = new[] { webClientId }
                     });
             }
-            catch
+            catch (InvalidJwtException)
             {
-                return Unauthorized("Invalid Google token");
+                // Gỡ lỗi nhanh: in aud/iss ra console
+                try
+                {
+                    var handler = new JwtSecurityTokenHandler();
+                    var jwt = handler.ReadJwtToken(dto.IdToken);
+                    var aud = string.Join(",", jwt.Audiences);
+                    var iss = jwt.Issuer;
+                    Console.WriteLine($"[GoogleLogin] Reject token aud={aud} iss={iss} cfgAud={webClientId}");
+                }
+                catch { /* ignore */ }
+
+                return Unauthorized(new { message = "Invalid Google token" });
             }
 
             if (payload.EmailVerified != true)
-                return Unauthorized("Email not verified");
+                return Unauthorized(new { message = "Email not verified" });
 
-            // (tuỳ chọn) giới hạn domain: dùng HostedDomain (không phải Hd)
-            if (!string.IsNullOrEmpty(allowedHd))
+            // (tuỳ chọn) giới hạn domain
+            if (!string.IsNullOrWhiteSpace(allowedHd))
             {
-                var hd = payload.HostedDomain; // ✅ đúng property cho v1.71.x
+                var hd = payload.HostedDomain; // đúng property
                 if (!string.Equals(hd, allowedHd, StringComparison.OrdinalIgnoreCase))
-                    return Unauthorized("Email domain not allowed");
+                    return Unauthorized(new { message = "Email domain not allowed" });
             }
 
-            // TODO: map payload.Email vào user DB của bạn; lấy role thật
-            var userName = payload.Name ?? payload.Email ?? payload.Subject;
+            // Map payload -> thông tin trả về (nếu cần lưu DB, thêm ở đây)
+            var userName = payload.Name ?? (payload.Email ?? payload.Subject);
             var role = "User";
 
-            var jwt = IssueJwt(userName, role);
+            var token = IssueJwt(userName, role);
 
             return Ok(new LoginResponse
             {
-                AccessToken = jwt,
+                AccessToken = token,
                 UserName = userName,
                 Role = role
             });
@@ -67,8 +81,13 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
 
         private string IssueJwt(string userName, string role)
         {
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_cfg["Jwt:Key"]));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            var issuer = _cfg["Jwt:Issuer"];
+            var audience = _cfg["Jwt:Audience"];
+            var keyStr = _cfg["Jwt:Key"];
+            if (string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(audience) || string.IsNullOrWhiteSpace(keyStr))
+                throw new InvalidOperationException("Jwt config is missing (Issuer/Audience/Key)");
+
+            var lifetimeMins = int.TryParse(_cfg["Jwt:AccessTokenMinutes"], out var m) ? m : 30;
 
             var claims = new List<Claim>
             {
@@ -78,15 +97,19 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
             };
 
-            var token = new JwtSecurityToken(
-                issuer: _cfg["Jwt:Issuer"],
-                audience: _cfg["Jwt:Audience"],
+            var creds = new SigningCredentials(
+                new SymmetricSecurityKey(Encoding.UTF8.GetBytes(keyStr)),
+                SecurityAlgorithms.HmacSha256);
+
+            var jwt = new JwtSecurityToken(
+                issuer: issuer,
+                audience: audience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddMinutes(double.Parse(_cfg["Jwt:AccessTokenMinutes"] ?? "30")),
+                expires: DateTime.UtcNow.AddMinutes(lifetimeMins),
                 signingCredentials: creds
             );
 
-            return new JwtSecurityTokenHandler().WriteToken(token);
+            return new JwtSecurityTokenHandler().WriteToken(jwt);
         }
     }
 }

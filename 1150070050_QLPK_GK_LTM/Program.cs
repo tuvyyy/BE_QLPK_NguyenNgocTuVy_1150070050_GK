@@ -6,45 +6,42 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ====== DB ======
+// DB
 builder.Services.AddDbContext<tuvyContext>(options =>
-{
-    options.UseSqlServer(builder.Configuration.GetConnectionString("ClinicDB"));
-});
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ClinicDB")));
 
-// ====== Controllers + JSON camelCase ======
+// Controllers + JSON camelCase
 builder.Services.AddControllers()
-    .AddJsonOptions(o =>
-        o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
+    .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
-// ====== CORS cho Android (mở) ======
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll", p =>
-        p.AllowAnyOrigin()
-         .AllowAnyHeader()
-         .AllowAnyMethod());
-});
+// CORS mở cho Android
+const string CorsAllowAll = "AllowAll";
+builder.Services.AddCors(o =>
+    o.AddPolicy(CorsAllowAll, p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
-// ====== Swagger ======
+// Email service (nếu bạn dùng)
+builder.Services.AddSingleton<EmailService>();
+
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ====== JWT Bearer ======
-var cfg = builder.Configuration;
-var key = Encoding.UTF8.GetBytes(cfg["Jwt:Key"]);
+// JWT
+var jwt = builder.Configuration.GetSection("Jwt");
+var keyStr = jwt["Key"] ?? throw new InvalidOperationException("Jwt:Key is missing.");
+var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(keyStr));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(o =>
     {
-        o.TokenValidationParameters = new TokenValidationParameters
+        o.TokenValidationParameters = new()
         {
             ValidateIssuer = true,
-            ValidIssuer = cfg["Jwt:Issuer"],
+            ValidIssuer = jwt["Issuer"],
             ValidateAudience = true,
-            ValidAudience = cfg["Jwt:Audience"],
+            ValidAudience = jwt["Audience"],
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(key),
+            IssuerSigningKey = signingKey,
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30)
         };
@@ -54,18 +51,16 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-// ====== Pipeline ======
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// Nếu không có cert thì có thể tạm tắt HTTPS:
-// app.UseHttpsRedirection();
 
-app.UseCors("AllowAll");
-app.UseAuthentication();   // ✅ phải trước UseAuthorization
+app.UseCors(CorsAllowAll);
+
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
