@@ -2,6 +2,8 @@
 using Microsoft.EntityFrameworkCore;
 using _1150070050_QLPK_GK_LTM.Models.Entities;
 using _1150070050_QLPK_GK_LTM.Models.DTOs;
+using ServiceEntity = _1150070050_QLPK_GK_LTM.Models.Entities.Service;
+
 
 namespace _1150070050_QLPK_GK_LTM.Controllers
 {
@@ -9,23 +11,21 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     [ApiController]
     public class ServicesController : ControllerBase
     {
-        private readonly tuvyContext _context;
-        public ServicesController(tuvyContext context) => _context = context;
+        private readonly ClinicDbContext _context;
+        public ServicesController(ClinicDbContext context) => _context = context;
 
         // ===== Helpers =====
 
         private static string NormalizeName(string? s)
             => string.IsNullOrWhiteSpace(s) ? "" : s.Trim();
 
-        private static ServiceDto ToDto(Service e) => new ServiceDto
+        private static ServiceDto ToDto(ServiceEntity e) => new ServiceDto
         {
             Id = e.Id,
             ServiceName = e.ServiceName,
             Price = e.Price
         };
 
-        // ===== GET: /api/Services?page=1&pageSize=20&q=&sort=name_asc =====
-        // sort: name_asc | name_desc | price_asc | price_desc  (mặc định: name_asc)
         [HttpGet]
         public async Task<IActionResult> GetServices(
             [FromQuery] int page = 1,
@@ -123,7 +123,7 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             var dup = await _context.Services.AnyAsync(s => s.ServiceName == name);
             if (dup) return Conflict(new { message = "Tên dịch vụ đã tồn tại." });
 
-            var e = new Service
+            var e = new ServiceEntity
             {
                 ServiceName = name,
                 Price = dto.Price

@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Data.SqlClient; // để bắt mã lỗi SQLServer (2601/2627)
+using Microsoft.Data.SqlClient;
 using _1150070050_QLPK_GK_LTM.Models.Entities;
 using _1150070050_QLPK_GK_LTM.Models.DTOs;
 
@@ -10,9 +10,9 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     [ApiController]
     public class AppointmentsController : ControllerBase
     {
-        private readonly tuvyContext _context;
+        private readonly ClinicDbContext _context;
 
-        public AppointmentsController(tuvyContext context)
+        public AppointmentsController(ClinicDbContext context)
         {
             _context = context;
         }
@@ -33,7 +33,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             string.IsNullOrWhiteSpace(s) ? "Scheduled" : s.Trim();
 
         // ================== GET LIST ==================
-        // GET /api/Appointments?date=2025-09-25&doctorId=1&patientId=2&page=1&pageSize=50
         [HttpGet]
         public async Task<IActionResult> GetAppointments(
             [FromQuery] DateTime? date = null,
@@ -75,8 +74,26 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             });
         }
 
+        // ================== ✅ NEW ENDPOINT ==================
+        // GET /api/Appointments/by-patient/{patientId}
+        [HttpGet("by-patient/{patientId:int}")]
+        public async Task<IActionResult> GetByPatient(int patientId)
+        {
+            var list = await _context.Appointments
+                .Include(a => a.Patient)
+                .Include(a => a.Doctor)
+                .Include(a => a.Service)
+                .Where(a => a.PatientId == patientId)
+                .OrderByDescending(a => a.AppointmentDate)
+                .ToListAsync();
+
+            if (!list.Any())
+                return NotFound(new { message = "Bệnh nhân này chưa có lịch hẹn." });
+
+            return Ok(list.Select(ToDto));
+        }
+
         // ================== GET BY ID ==================
-        // GET /api/Appointments/{id}
         [HttpGet("{id:int}")]
         public async Task<ActionResult<AppointmentResponseDto>> GetById(int id)
         {
@@ -90,21 +107,18 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
         // ================== CREATE ==================
-        // POST /api/Appointments
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] AppointmentDto dto)
         {
             if (dto.PatientId <= 0 || dto.DoctorId <= 0 || dto.ServiceId <= 0)
                 return BadRequest(new { message = "Thiếu PatientId/DoctorId/ServiceId." });
 
-            // Kiểm tra FK tồn tại
             var okPatient = await _context.Patients.AnyAsync(x => x.Id == dto.PatientId);
             var okDoctor = await _context.Doctors.AnyAsync(x => x.Id == dto.DoctorId);
             var okService = await _context.Services.AnyAsync(x => x.Id == dto.ServiceId);
             if (!okPatient || !okDoctor || !okService)
                 return BadRequest(new { message = "Bệnh nhân/Bác sĩ/Dịch vụ không tồn tại." });
 
-            // Validate trùng giờ (cùng DoctorId + AppointmentDate) – status khác Canceled
             var conflict = await _context.Appointments.AnyAsync(a =>
                 a.DoctorId == dto.DoctorId &&
                 a.AppointmentDate == dto.AppointmentDate &&
@@ -129,11 +143,9 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             }
             catch (DbUpdateException ex) when (IsSqlUniqueConflict(ex))
             {
-                // Phòng trường hợp đua ghi → unique index ở DB chặn
                 return Conflict(new { message = "Bác sĩ đã có lịch tại thời điểm này." });
             }
 
-            // load để trả tên
             await _context.Entry(entity).Reference(e => e.Patient).LoadAsync();
             await _context.Entry(entity).Reference(e => e.Doctor).LoadAsync();
             await _context.Entry(entity).Reference(e => e.Service).LoadAsync();
@@ -142,21 +154,18 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
         // ================== UPDATE ==================
-        // PUT /api/Appointments/{id}
         [HttpPut("{id:int}")]
         public async Task<IActionResult> Update(int id, [FromBody] AppointmentDto dto)
         {
             var a = await _context.Appointments.FindAsync(id);
             if (a == null) return NotFound(new { message = "Không tìm thấy lịch hẹn." });
 
-            // FK tồn tại
             var okPatient = await _context.Patients.AnyAsync(x => x.Id == dto.PatientId);
             var okDoctor = await _context.Doctors.AnyAsync(x => x.Id == dto.DoctorId);
             var okService = await _context.Services.AnyAsync(x => x.Id == dto.ServiceId);
             if (!okPatient || !okDoctor || !okService)
                 return BadRequest(new { message = "Bệnh nhân/Bác sĩ/Dịch vụ không tồn tại." });
 
-            // Kiểm tra trùng với các lịch khác
             var conflict = await _context.Appointments.AnyAsync(x =>
                 x.Id != id &&
                 x.DoctorId == dto.DoctorId &&
@@ -184,7 +193,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
         // ================== UPDATE STATUS ==================
-        // PUT /api/Appointments/{id}/status?value=Completed
         [HttpPut("{id:int}/status")]
         public async Task<IActionResult> UpdateStatus(int id, [FromQuery] string value)
         {
@@ -200,7 +208,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
         // ================== DELETE ==================
-        // DELETE /api/Appointments/{id}
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> Delete(int id)
         {
@@ -213,12 +220,10 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
         // ================== EXTRAS ==================
-        // GET /api/Appointments/statuses
         [HttpGet("statuses")]
         public IActionResult GetStatuses() =>
             Ok(new[] { "Scheduled", "CheckedIn", "InExam", "Completed", "Canceled" });
 
-        // GET /api/Appointments/today?doctorId=1
         [HttpGet("today")]
         public async Task<IActionResult> Today([FromQuery] int? doctorId = null)
         {
@@ -237,8 +242,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         // ================== Utilities ==================
         private static bool IsSqlUniqueConflict(DbUpdateException ex)
         {
-            // 2601: Cannot insert duplicate key row with unique index
-            // 2627: Violation of UNIQUE KEY constraint
             if (ex.InnerException is SqlException sqlEx)
                 return sqlEx.Number == 2601 || sqlEx.Number == 2627;
             return false;

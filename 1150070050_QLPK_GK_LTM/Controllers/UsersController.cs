@@ -1,7 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using _1150070050_QLPK_GK_LTM.Models.Entities;
+using _1150070050_QLPK_GK_LTM.Helpers;
 using System;
+using System.Linq;
+using System.Threading.Tasks;
+using _1150070050_QLPK_GK_LTM.Models.DTOs;
+using _1150070050_QLPK_GK_LTM.Service;
 
 namespace _1150070050_QLPK_GK_LTM.Controllers
 {
@@ -9,10 +14,10 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     [ApiController]
     public class UsersController : ControllerBase
     {
-        private readonly tuvyContext _context;
+        private readonly ClinicDbContext _context;
         private readonly EmailService _emailService;
 
-        public UsersController(tuvyContext context, EmailService emailService)
+        public UsersController(ClinicDbContext context, EmailService emailService)
         {
             _context = context;
             _emailService = emailService;
@@ -21,7 +26,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         // ===============================
         // CRUD USERS
         // ===============================
-
         [HttpGet]
         public async Task<ActionResult<IEnumerable<User>>> GetUsers()
         {
@@ -63,72 +67,133 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return NoContent();
         }
 
-        // ===============================
-        // LOGIN API
-        // ===============================
-        public class LoginDto
-        {
-            public string Username { get; set; }
-            public string Password { get; set; }
-        }
+
+        // LOGIN (Username / Email / SĐT)
 
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
-            if (dto == null || string.IsNullOrEmpty(dto.Username) || string.IsNullOrEmpty(dto.Password))
-                return BadRequest(new { message = "Thiếu thông tin đăng nhập" });
+            if (string.IsNullOrWhiteSpace(dto.Password))
+                return BadRequest(new { message = "Thiếu mật khẩu" });
 
-            var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.Username == dto.Username && u.PasswordHash == dto.Password);
+            // 🔎 Tìm user theo Username hoặc Phone
+            User? user = null;
+            if (!string.IsNullOrWhiteSpace(dto.Username))
+            {
+                user = await _context.Users
+                    .Include(u => u.Patients) // ✅ include ánh xạ sang bệnh nhân
+                    .FirstOrDefaultAsync(u => u.Username == dto.Username);
+            }
+            else if (!string.IsNullOrWhiteSpace(dto.Phone))
+            {
+                user = await _context.Users
+                    .Include(u => u.Patients)
+                    .FirstOrDefaultAsync(u => u.Phone == dto.Phone);
+            }
 
             if (user == null)
-                return Unauthorized(new { message = "Sai tài khoản hoặc mật khẩu" });
+                return Unauthorized(new { message = "❌ Sai tài khoản hoặc mật khẩu" });
+
+            // ✅ Kiểm tra mật khẩu
+            if (!PasswordHasher.Verify(dto.Password, user.PasswordHash))
+                return Unauthorized(new { message = "❌ Sai mật khẩu" });
+
+            // ✅ Lấy đúng ID bệnh nhân (nếu có)
+            int returnId = user.Patients.FirstOrDefault()?.Id ?? user.Id;
 
             return Ok(new
             {
-                user.Id,
-                user.Username,
-                user.Email,
-                user.Role
+                message = "✅ Đăng nhập thành công!",
+                id = returnId,                     // ⚙️ Trả về PatientId nếu có
+                username = user.Username,
+                email = user.Email,
+                role = user.Role
             });
         }
 
-        // ===============================
-        // REGISTER API
-        // ===============================
+
+
+        // REGISTER (Tên, Username, Phone, Email)
         public class RegisterDto
         {
-            public string Username { get; set; }
-            public string Password { get; set; }
+            public string FullName { get; set; }
+            public string Username { get; set; }   // có thể là tên đăng nhập hoặc sđt
+            public string Phone { get; set; }
             public string Email { get; set; }
+            public string Password { get; set; }
         }
 
         [HttpPost("register")]
-        public async Task<IActionResult> Register([FromBody] User user)
+        public async Task<IActionResult> Register([FromBody] RegisterDto dto)
         {
-            if (user == null || string.IsNullOrEmpty(user.Username) || string.IsNullOrEmpty(user.PasswordHash))
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Username) || string.IsNullOrWhiteSpace(dto.Password))
                 return BadRequest(new { message = "Thiếu thông tin đăng ký" });
 
-            // Kiểm tra trùng username
-            var existingUser = await _context.Users.FirstOrDefaultAsync(u => u.Username == user.Username);
+            // Kiểm tra tài khoản tồn tại
+            var existingUser = await _context.Users
+                .FirstOrDefaultAsync(u =>
+                    u.Username == dto.Username ||
+                    u.Email == dto.Email ||
+                    u.Phone == dto.Phone);
             if (existingUser != null)
-                return Conflict(new { message = "Tên đăng nhập đã tồn tại" });
+                return Conflict(new { message = "❌ Tài khoản đã tồn tại!" });
 
-            // Lưu user mới
-            _context.Users.Add(user);
+            // 🔍 Kiểm tra hồ sơ bệnh nhân cũ
+            var existingPatient = await _context.Patients
+                .FirstOrDefaultAsync(p => p.Phone == dto.Phone || p.Phone == dto.Username);
+
+            // 🔒 Hash mật khẩu
+            var hashedPassword = PasswordHasher.Hash(dto.Password);
+
+            // ✅ Tạo user mới (role patient)
+            var newUser = new User
+            {
+                FullName = dto.FullName,
+                Username = dto.Username,
+                Phone = dto.Phone,
+                Email = dto.Email,
+                PasswordHash = hashedPassword,
+                Role = "patient",      // ✅ Bệnh nhân
+                LoginProvider = "local"
+            };
+
+            _context.Users.Add(newUser);
             await _context.SaveChangesAsync();
+
+            // ✅ Đồng bộ hồ sơ bệnh nhân
+            if (existingPatient != null)
+            {
+                if (existingPatient.UserId == null)
+                {
+                    existingPatient.UserId = newUser.Id; // liên kết
+                    await _context.SaveChangesAsync();
+                }
+            }
+            else
+            {
+                _context.Patients.Add(new Patient
+                {
+                    FullName = dto.FullName,
+                    Phone = dto.Phone ?? dto.Username,
+                    Email = dto.Email,
+                    UserId = newUser.Id
+                });
+                await _context.SaveChangesAsync();
+            }
 
             return Ok(new
             {
-                message = "Đăng ký thành công",
-                user.Id,
-                user.Email,
-                user.Role
+                message = "✅ Đăng ký thành công!",
+                newUser.Id,
+                newUser.Username,
+                newUser.Phone,
+                newUser.Email,
+                newUser.Role
             });
         }
 
         // ===============================
-        // QUÊN MẬT KHẨU (GỬI MÃ OTP)
+        // QUÊN MẬT KHẨU (OTP)
         // ===============================
         [HttpPost("forgot-password")]
         public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
@@ -137,94 +202,111 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             if (user == null)
                 return NotFound(new { message = "Email không tồn tại" });
 
-            // Tạo OTP chỉ có 6 số và gửi qua email
             string otp = GenerateOtp();
             _emailService.SendOtpEmail(user.Email, otp);
 
-            // Lưu OTP vào cơ sở dữ liệu để xác thực sau này
             user.OtpCode = otp;
-            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10); // Hết hạn sau 10 phút
+            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "Mã OTP đã được gửi đến email của bạn" });
+            return Ok(new { message = "✅ Mã OTP đã được gửi đến email của bạn" });
         }
 
+        [HttpPost("forgot-password-sms")]
+        public async Task<IActionResult> ForgotPasswordSms([FromBody] ForgotPasswordSmsDto dto, [FromServices] SmsService smsService)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Phone))
+                return BadRequest(new { message = "Vui lòng nhập số điện thoại" });
+
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == dto.Phone);
+            if (user == null)
+                return NotFound(new { message = "❌ Số điện thoại không tồn tại" });
+
+            string otp = GenerateOtp();
+            smsService.SendOtpSms(user.Phone, otp);
+
+            user.OtpCode = otp;
+            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "✅ OTP đã được gửi qua SMS (giả lập)!", otp });
+            // ⚠️ Trong production, KHÔNG trả OTP ra response
+        }
+
+        public class ForgotPasswordSmsDto
+        {
+            public string Phone { get; set; }
+        }
+
+
         // ===============================
-        // XÁC THỰC MÃ OTP
+        // XÁC THỰC OTP
         // ===============================
         [HttpPost("verify-otp")]
         public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
-            if (user == null)
-                return NotFound(new { message = "Email không tồn tại" });
+            User? user = null;
 
-            // Log OTP và thời gian hết hạn để kiểm tra
-            Console.WriteLine($"Received OTP: {dto.OtpCode}, User OTP: {user.OtpCode}, Expiry: {user.OtpExpiry}");
+            if (!string.IsNullOrWhiteSpace(dto.Email))
+                user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            else if (!string.IsNullOrWhiteSpace(dto.Phone))
+                user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == dto.Phone);
+
+            if (user == null) return NotFound(new { message = "Không tìm thấy tài khoản" });
 
             if (user.OtpCode != dto.OtpCode || user.OtpExpiry < DateTime.UtcNow)
                 return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
 
-            return Ok(new { message = "OTP xác thực thành công" });
+            return Ok(new { message = "✅ OTP xác thực thành công" });
         }
 
         public class VerifyOtpDto
         {
-            public string Email { get; set; }
+            public string? Email { get; set; }
+            public string? Phone { get; set; }
             public string OtpCode { get; set; }
-        }
-
-        // ===============================
-        // THAY ĐỔI MẬT KHẨU
-        // ===============================
-        [HttpPost("reset-password")]
-        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
-        {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
-            if (user == null)
-                return NotFound(new { message = "Email không tồn tại" });
-
-            // Kiểm tra OTP
-            if (user.OtpCode != dto.OtpCode || user.OtpExpiry < DateTime.UtcNow)
-                return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
-
-            // Cập nhật mật khẩu mới
-            user.PasswordHash = dto.NewPassword; // Hash mật khẩu nếu cần thiết
-            user.OtpCode = null; // Xóa mã OTP sau khi sử dụng
-            user.OtpExpiry = null;
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new { message = "Mật khẩu đã được thay đổi thành công" });
-        }
-
-        // ===============================
-        // Lớp DTOs
-        // ===============================
-        public class ForgotPasswordDto
-        {
-            public string Email { get; set; }
         }
 
         public class ResetPasswordDto
         {
-            public string Email { get; set; }
+            public string? Email { get; set; }
+            public string? Phone { get; set; }
             public string OtpCode { get; set; }
             public string NewPassword { get; set; }
         }
 
-        // ===============================
-        // Tạo mã OTP 6 số ngẫu nhiên
-        // ===============================
+        // ĐẶT LẠI MẬT KHẨU
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
+        {
+            User? user = null;
+
+            if (!string.IsNullOrWhiteSpace(dto.Email))
+                user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            else if (!string.IsNullOrWhiteSpace(dto.Phone))
+                user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == dto.Phone);
+
+            if (user == null)
+                return NotFound(new { message = "Không tìm thấy tài khoản" });
+
+            if (user.OtpCode != dto.OtpCode || user.OtpExpiry < DateTime.UtcNow)
+                return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
+
+            user.PasswordHash = PasswordHasher.Hash(dto.NewPassword);
+            user.OtpCode = null;
+            user.OtpExpiry = null;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "✅ Mật khẩu đã được thay đổi thành công" });
+        }
+
+        // DTOs & Helper
+        public class ForgotPasswordDto { public string Email { get; set; } }
+
         private string GenerateOtp(int length = 6)
         {
-            Random random = new Random();
-            string otp = "";
-            for (int i = 0; i < length; i++)
-            {
-                otp += random.Next(0, 10).ToString(); // Chỉ tạo số từ 0 đến 9
-            }
-            return otp;
+            var random = new Random();
+            return string.Concat(Enumerable.Range(0, length).Select(_ => random.Next(0, 10)));
         }
     }
 }

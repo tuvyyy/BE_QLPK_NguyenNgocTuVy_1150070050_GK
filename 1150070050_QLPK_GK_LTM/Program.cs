@@ -1,14 +1,17 @@
-﻿using _1150070050_QLPK_GK_LTM.Models.Entities;
+﻿using _1150070050_QLPK_GK_LTM.Helpers;
+using _1150070050_QLPK_GK_LTM.Models.Entities;
+using _1150070050_QLPK_GK_LTM.Service;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using QuestPDF.Infrastructure;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// DB
-builder.Services.AddDbContext<tuvyContext>(options =>
+builder.Services.AddDbContext<ClinicDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("ClinicDB")));
+
 
 // Controllers + JSON camelCase
 builder.Services.AddControllers()
@@ -22,9 +25,14 @@ builder.Services.AddCors(o =>
 // Email service (nếu bạn dùng)
 builder.Services.AddSingleton<EmailService>();
 
+// 🔹 Khai báo license QuestPDF
+QuestPDF.Settings.License = LicenseType.Community;
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddSingleton<SmsService>();
 
 // JWT
 var jwt = builder.Configuration.GetSection("Jwt");

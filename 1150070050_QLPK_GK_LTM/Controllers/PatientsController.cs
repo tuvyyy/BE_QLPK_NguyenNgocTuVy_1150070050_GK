@@ -9,8 +9,8 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     [ApiController]
     public class PatientsController : ControllerBase
     {
-        private readonly tuvyContext _context;
-        public PatientsController(tuvyContext context) => _context = context;
+        private readonly ClinicDbContext _context;
+        public PatientsController(ClinicDbContext context) => _context = context;
 
         // ==== Helpers: chuẩn hoá & validate SĐT VN ====
         private static string NormalizeVnPhone(string? input)

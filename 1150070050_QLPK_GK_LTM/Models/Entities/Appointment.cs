@@ -17,6 +17,8 @@ public partial class Appointment
 
     public string Status { get; set; } = null!;
 
+    public DateTime CreatedAt { get; set; }
+
     public virtual Doctor Doctor { get; set; } = null!;
 
     public virtual Patient Patient { get; set; } = null!;

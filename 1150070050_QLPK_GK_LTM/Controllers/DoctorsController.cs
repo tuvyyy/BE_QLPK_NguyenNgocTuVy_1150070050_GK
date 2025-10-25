@@ -9,8 +9,8 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
     [ApiController]
     public class DoctorsController : ControllerBase
     {
-        private readonly tuvyContext _context;
-        public DoctorsController(tuvyContext context) { _context = context; }
+        private readonly ClinicDbContext _context;
+        public DoctorsController(ClinicDbContext context) { _context = context; }
         private static string NormalizeVnPhone(string? input)
         {
             if (string.IsNullOrWhiteSpace(input)) return "";
