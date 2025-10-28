@@ -27,6 +27,10 @@ public partial class User
 
     public string? Phone { get; set; }
 
+    public virtual ICollection<DeleteRequest> DeleteRequestApprovedByNavigations { get; set; } = new List<DeleteRequest>();
+
+    public virtual ICollection<DeleteRequest> DeleteRequestRequestedByNavigations { get; set; } = new List<DeleteRequest>();
+
     public virtual ICollection<Doctor> Doctors { get; set; } = new List<Doctor>();
 
     public virtual ICollection<Notification> NotificationReceivers { get; set; } = new List<Notification>();

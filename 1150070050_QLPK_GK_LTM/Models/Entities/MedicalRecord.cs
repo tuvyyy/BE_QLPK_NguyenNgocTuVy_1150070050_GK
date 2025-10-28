@@ -31,6 +31,8 @@ public partial class MedicalRecord
 
     public bool IsResultSent { get; set; }
 
+    public virtual ICollection<DeleteRequest> DeleteRequests { get; set; } = new List<DeleteRequest>();
+
     public virtual Doctor Doctor { get; set; } = null!;
 
     public virtual Patient Patient { get; set; } = null!;

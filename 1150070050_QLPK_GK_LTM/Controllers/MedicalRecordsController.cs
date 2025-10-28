@@ -43,7 +43,8 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return Ok(records);
         }
 
-        // ✅ 3️⃣ Lấy hồ sơ cơ bản (chỉ dữ liệu chính)
+
+        // ✅ Lấy hồ sơ cơ bản (chỉ dữ liệu chính)
         [HttpGet("{id}")]
         public async Task<IActionResult> GetBasic(int id)
         {
@@ -76,8 +77,8 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
 
-        // =========================================================
-        // ✅ 3️⃣ Tạo mới hồ sơ (có Appointment + Notification)
+
+        // ✅ Tạo mới hồ sơ (có Appointment + Notification)
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] MedicalRecordCreateDto dto)
         {
@@ -185,7 +186,7 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             }
         }
 
-        // =========================================================
+       
         // ✅ Cập nhật hồ sơ
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromBody] MedicalRecordUpdateDto dto)
@@ -203,7 +204,7 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return Ok(new { message = "✅ Cập nhật hồ sơ thành công!" });
         }
 
-        // =========================================================
+        
         // ✅ Xóa hồ sơ
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
@@ -236,6 +237,7 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             return Ok(new { message = "✅ Hồ sơ đã được bác sĩ ký xác nhận!", recordId, record.SignedAt });
         }
 
+        
         // ✅ Hủy ký (cho phép sửa/xóa lại)
         [HttpPost("unsign/{recordId}")]
         public async Task<IActionResult> UnsignPrescription(int recordId)
@@ -255,7 +257,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         }
 
 
-        // =========================================================
         // ✅ Lấy tất cả hồ sơ của một bệnh nhân
         [HttpGet("by-patient/{patientId}")]
         public async Task<IActionResult> GetByPatient(int patientId)
@@ -283,5 +284,107 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
 
             return Ok(records);
         }
+
+
+        // =========================================================
+        // 🔹 USER gửi yêu cầu xóa hồ sơ
+        // =========================================================
+        [HttpPost("{recordId}/request-delete")]
+        public async Task<IActionResult> RequestDelete(int recordId, [FromBody] DeleteRequestDto dto)
+        {
+            var record = await _context.MedicalRecords.FindAsync(recordId);
+            if (record == null)
+                return NotFound(new { message = "Không tìm thấy hồ sơ cần xóa." });
+
+            var user = await _context.Users.FindAsync(dto.RequestedBy);
+            if (user == null || user.Role != "user")
+                return Unauthorized(new { message = "Chỉ nhân viên y tế mới được gửi yêu cầu xóa hồ sơ." });
+
+            var request = new DeleteRequest
+            {
+                RecordId = recordId,
+                RequestedBy = dto.RequestedBy,
+                Reason = dto.Reason,
+                RequestedAt = DateTime.Now,
+                Status = "Pending"
+            };
+
+            _context.DeleteRequests.Add(request);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "📩 Đã gửi yêu cầu xóa hồ sơ, chờ admin duyệt!",
+                requestId = request.RequestId
+            });
+        }
+
+
+        // =========================================================
+        // 🔹 ADMIN duyệt yêu cầu xóa
+        // =========================================================
+        [HttpPost("approve-delete/{requestId}")]
+        public async Task<IActionResult> ApproveDelete(int requestId, [FromBody] ApproveDeleteDto dto)
+        {
+            var request = await _context.DeleteRequests.FindAsync(requestId);
+            if (request == null)
+                return NotFound(new { message = "Không tìm thấy yêu cầu xóa." });
+
+            var admin = await _context.Users.FindAsync(dto.AdminId);
+            if (admin == null || admin.Role != "admin")
+                return Unauthorized(new { message = "Chỉ admin mới được duyệt yêu cầu xóa hồ sơ." });
+
+            if (request.Status != "Pending")
+                return BadRequest(new { message = "Yêu cầu này đã được xử lý trước đó." });
+
+            var record = await _context.MedicalRecords.FindAsync(request.RecordId);
+            if (record == null)
+                return NotFound(new { message = "Không tìm thấy hồ sơ tương ứng để xóa." });
+
+            if (dto.IsApproved)
+            {
+                _context.MedicalRecords.Remove(record);
+                request.Status = "Approved";
+                request.ApprovedBy = dto.AdminId;
+                request.ApprovedAt = DateTime.Now;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "✅ Hồ sơ đã được admin duyệt và xóa!", requestId });
+            }
+            else
+            {
+                request.Status = "Rejected";
+                request.ApprovedBy = dto.AdminId;
+                request.ApprovedAt = DateTime.Now;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "🚫 Hồ sơ bị từ chối xóa.", requestId });
+            }
+        }
+
+
+
+        [HttpGet("delete-requests/pending")]
+        public async Task<IActionResult> GetPendingDeleteRequests()
+        {
+            var list = await _context.DeleteRequests
+                .Include(r => r.Record)
+                .Include(r => r.RequestedByNavigation)
+                .Where(r => r.Status == "Pending")
+                .Select(r => new
+                {
+                    r.RequestId,
+                    r.RecordId,
+                    r.Record.RecordCode,
+                    RequestedBy = r.RequestedByNavigation.Username,
+                    r.Reason,
+                    r.RequestedAt,
+                    r.Status
+                })
+                .ToListAsync();
+
+            return Ok(list);
+        }
+
     }
 }

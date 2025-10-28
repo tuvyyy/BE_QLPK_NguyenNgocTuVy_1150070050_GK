@@ -17,6 +17,8 @@ public partial class ClinicDbContext : DbContext
 
     public virtual DbSet<Appointment> Appointments { get; set; }
 
+    public virtual DbSet<DeleteRequest> DeleteRequests { get; set; }
+
     public virtual DbSet<Doctor> Doctors { get; set; }
 
     public virtual DbSet<DrugInteraction> DrugInteractions { get; set; }
@@ -77,6 +79,33 @@ public partial class ClinicDbContext : DbContext
                 .HasForeignKey(d => d.ServiceId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__Appointme__Servi__440B1D61");
+        });
+
+        modelBuilder.Entity<DeleteRequest>(entity =>
+        {
+            entity.HasKey(e => e.RequestId).HasName("PK__DeleteRe__33A8517AB9B719A8");
+
+            entity.Property(e => e.ApprovedAt).HasColumnType("datetime");
+            entity.Property(e => e.Reason).HasMaxLength(500);
+            entity.Property(e => e.RequestedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+            entity.Property(e => e.Status)
+                .HasMaxLength(50)
+                .HasDefaultValue("Pending");
+
+            entity.HasOne(d => d.ApprovedByNavigation).WithMany(p => p.DeleteRequestApprovedByNavigations)
+                .HasForeignKey(d => d.ApprovedBy)
+                .HasConstraintName("FK_DeleteRequests_Users_Approved");
+
+            entity.HasOne(d => d.Record).WithMany(p => p.DeleteRequests)
+                .HasForeignKey(d => d.RecordId)
+                .HasConstraintName("FK_DeleteRequests_MedicalRecords");
+
+            entity.HasOne(d => d.RequestedByNavigation).WithMany(p => p.DeleteRequestRequestedByNavigations)
+                .HasForeignKey(d => d.RequestedBy)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_DeleteRequests_Users_Requested");
         });
 
         modelBuilder.Entity<Doctor>(entity =>

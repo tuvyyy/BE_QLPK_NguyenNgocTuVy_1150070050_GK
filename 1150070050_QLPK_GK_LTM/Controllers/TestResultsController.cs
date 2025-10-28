@@ -49,6 +49,9 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
 
             return Ok(results);
         }
+        
+        
+        
         // ✅ Lấy chi tiết theo ID
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
@@ -61,8 +64,31 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
             if (result == null)
                 return NotFound(new { message = "❌ Không tìm thấy kết quả xét nghiệm!" });
 
-            return Ok(result);
+            // 🩵 Nếu chưa có file URL thì tự sinh luôn
+            if (string.IsNullOrEmpty(result.FileUrl))
+            {
+                var host = $"{Request.Scheme}://{Request.Host}";
+                result.FileUrl = $"{host}/api/TestResults/export-pdf/{result.ResultId}";
+            }
+
+            // 🩷 Trả dữ liệu JSON gọn gàng (không bị vòng lặp)
+            var response = new
+            {
+                result.ResultId,
+                result.RecordId,
+                RecordCode = result.Record?.RecordCode,
+                result.TestType,
+                result.ResultSummary,
+                result.FileUrl,
+                result.CreatedAt,
+                result.IsSigned,
+                result.SignedAt
+            };
+
+            return Ok(response);
         }
+
+
 
 
         // ✅ Lấy dữ liệu biểu đồ (dạng JSON indicators)
@@ -117,7 +143,6 @@ namespace _1150070050_QLPK_GK_LTM.Controllers
         {
             var results = await _context.TestResults
                 .Include(r => r.Record)
-                .Include(r => r.DoctorId)
                 .Where(r => r.Record.PatientId == patientId)
                 .Select(r => new
                 {
